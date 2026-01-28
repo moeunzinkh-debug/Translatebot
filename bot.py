@@ -1,13 +1,13 @@
 import os
 import logging
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from groq import Groq
 
-# កំណត់ការបង្ហាញ Log
+# កំណត់ Logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# បញ្ជីកូដភាសាសរុប ៧០ (សម្រាប់ AI យល់ន័យ)
+# បញ្ជីកូដភាសាទាំង ៧០
 LANG_CODES = {
     "kh": "Khmer", "en": "English", "ch": "Chinese", "th": "Thai", "vn": "Vietnamese",
     "jp": "Japanese", "kr": "Korean", "fr": "French", "de": "German", "ru": "Russian",
@@ -27,71 +27,89 @@ LANG_CODES = {
 
 user_settings = {}
 
-# ហៅប្រើ Groq Client
+# ហៅប្រើ Groq AI (Model: llama-3.3-70b-versatile)
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🚀 **AI Translator Bot (70 Languages)**\n"
-        "ខ្ញុំអាចបកប្រែ Slang, Idioms និងអត្ថបទធម្មតាបានយ៉ាងឆ្លាតវៃ។\n\n"
-        "👉 ប្រើ `/list` ដើម្បីមើលភាសាទាំងអស់\n"
-        "👉 ប្រើ `/en`, `/kh`, `/th` ដើម្បីប្តូរភាសា\n"
-        "👉 ផ្ញើសារដើម្បីបកប្រែភ្លាមៗ!"
+    keyboard = [
+        [InlineKeyboardButton("🌐 បញ្ជីភាសាទាំង ៧០", callback_data='list_langs')],
+        [
+            InlineKeyboardButton("🇰🇭 ខ្មែរ", callback_data='set_kh'),
+            InlineKeyboardButton("🇺🇸 English", callback_data='set_en'),
+            InlineKeyboardButton("🇹🇭 Thai", callback_data='set_th')
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    welcome_text = (
+        "🔥 **AI PRO Translator (Llama 3.3)**\n\n"
+        "ខ្ញុំអាចបកប្រែពាក្យពិបាកៗ ស៊ាំៗ និង Slang បានយ៉ាងច្បាស់។\n"
+        "សូមជ្រើសរើសភាសាគោលដៅរបស់អ្នក៖"
     )
+    if update.message:
+        await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        await update.callback_query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def list_langs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     codes = list(LANG_CODES.keys())
-    text = "🌐 **បញ្ជីកូដភាសាទាំង ៧០:**\n\n"
+    text = "🌐 **កូដភាសាសរុប ៧០:**\n\n"
     for i in range(0, len(codes), 5):
         text += " • " + ", ".join([f"/{c}" for c in codes[i:i+5]]) + "\n"
-    await update.message.reply_text(text)
+    
+    back_btn = [[InlineKeyboardButton("⬅️ ត្រឡប់ក្រោយ", callback_data='back_start')]]
+    await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(back_btn))
 
-async def set_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()
+
+    if query.data == 'list_langs':
+        await list_langs(update, context)
+    elif query.data == 'back_start':
+        await start(update, context)
+    elif query.data.startswith('set_'):
+        lang_code = query.data.split('_')[1]
+        user_settings[user_id] = LANG_CODES.get(lang_code, "Khmer")
+        await query.edit_message_text(f"✅ ភាសាគោលដៅ៖ **{user_settings[user_id]}**")
+
+async def set_lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    command = update.message.text.replace("/", "").lower()
-    if command in LANG_CODES:
-        user_settings[user_id] = LANG_CODES[command]
-        await update.message.reply_text(f"✅ ភាសាគោលដៅ: **{LANG_CODES[command]}**")
+    cmd = update.message.text.replace("/", "").lower()
+    if cmd in LANG_CODES:
+        user_settings[user_id] = LANG_CODES[cmd]
+        await update.message.reply_text(f"✅ ភាសាគោលដៅ៖ **{LANG_CODES[cmd]}**")
 
 async def translate_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    text_input = update.message.text
-    target_lang = user_settings.get(user_id, "Khmer")
-
+    target = user_settings.get(user_id, "Khmer")
+    
     try:
-        # Prompt សម្រាប់ឱ្យ AI យល់ Slang/Idioms
-        prompt = (
-            f"You are a professional translator. Translate the following text into {target_lang}. "
-            f"If the text contains slang, idioms, or cultural expressions, translate the meaning naturally "
-            f"and provide a very brief explanation in {target_lang} if necessary. "
-            f"Text: '{text_input}'"
-        )
-        
+        # ការប្រើប្រាស់ Llama-3.3-70b-versatile
         completion = client.chat.completions.create(
-            model="llama3-8b-8192",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.4, # កម្រិតច្បាស់លាស់
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": f"You are a master translator. Translate the text to {target}. If there are idioms, slang, or deep cultural meanings, explain them briefly and naturally in {target}."},
+                {"role": "user", "content": update.message.text}
+            ],
+            temperature=0.3, # ទាបជាងមុនដើម្បីឱ្យការបកប្រែកាន់តែច្បាស់លាស់ (Precision)
         )
-        
-        result = completion.choices[0].message.content
-        await update.message.reply_text(result)
-        
+        await update.message.reply_text(completion.choices[0].message.content)
     except Exception as e:
         logging.error(f"AI Error: {e}")
-        await update.message.reply_text("❌ AI កំពុងមានបញ្ហា ឬ API Key ខុស។")
+        await update.message.reply_text("❌ មានបញ្ហាជាមួយ AI Model។ សូមឆែកមើល API Quota របស់អ្នក។")
 
 if __name__ == '__main__':
     BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-    
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("list", list_langs))
+    app.add_handler(CallbackQueryHandler(handle_callback))
     
     for cmd in LANG_CODES.keys():
-        app.add_handler(CommandHandler(cmd, set_lang))
+        app.add_handler(CommandHandler(cmd, set_lang_command))
 
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), translate_ai))
 
-    print("🚀 Bot កំពុងដំណើរការជាមួយ ៧០ ភាសា...")
+    print("🚀 Bot is running with Llama 3.3-70b...")
     app.run_polling()
