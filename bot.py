@@ -15,11 +15,11 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Bot status: Online. Port: 8080 bound.")
+        self.wfile.write(b"Bot status: Online. Port: 10000 bound.")
 
 def run_port_listener():
-    # ប្រើ Port 8080 ជា Default សម្រាប់ Render
-    port = int(os.environ.get("PORT", 8080))
+    # កែប្រែពី 8080 ទៅជា 10000 តាមការកំណត់របស់អ្នក
+    port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     logging.info(f"🌍 Web Server started on port {port}")
     server.serve_forever()
@@ -94,7 +94,7 @@ async def translate_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Error!")
 
 if __name__ == '__main__':
-    # ១. បើក Port Listener ក្នុង Thread ថ្មី
+    # ១. បើក Port Listener ក្នុង Thread ថ្មី (Port 10000)
     threading.Thread(target=run_port_listener, daemon=True).start()
 
     # ២. បង្កើត Bot
@@ -112,5 +112,5 @@ if __name__ == '__main__':
     # ទទួលសារអត្ថបទ
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), translate_ai))
 
-    logging.info("🚀 Bot is running with all features...")
+    logging.info("🚀 Bot is running with Port 10000 binding...")
     app.run_polling()
