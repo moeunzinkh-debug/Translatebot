@@ -2,79 +2,96 @@ import os
 import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-from deep_translator import GoogleTranslator
+from groq import Groq
 
-# កំណត់ការបង្ហាញ Log ដើម្បីងាយស្រួលឆែកមើលកំហុសលើ Render
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
-    level=logging.INFO
-)
+# កំណត់ការបង្ហាញ Log
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# បញ្ជីកូដភាសាសរុប ៧០
+# បញ្ជីកូដភាសាសរុប ៧០ (សម្រាប់ AI យល់ន័យ)
 LANG_CODES = {
-    "kh": "km", "en": "en", "ch": "zh-CN", "th": "th", "vn": "vi", "jp": "ja", "kr": "ko",
-    "fr": "fr", "de": "de", "ru": "ru", "es": "es", "it": "it", "in": "hi", "id": "id",
-    "my": "ms", "ph": "tl", "ar": "ar", "pt": "pt", "tr": "tr", "nl": "nl", "pl": "pl",
-    "sv": "sv", "da": "da", "fi": "fi", "no": "no", "cs": "cs", "el": "el", "iw": "he",
-    "ro": "ro", "uk": "uk", "hu": "hu", "sk": "sk", "bg": "bg", "hr": "hr", "sr": "sr",
-    "sl": "sl", "et": "et", "lv": "lv", "lt": "lt", "fa": "fa", "bn": "bn", "pa": "pa",
-    "gu": "gu", "ta": "ta", "te": "te", "kn": "kn", "ml": "ml", "si": "si", "ne": "ne",
-    "lo": "lo", "myan": "my", "ka": "ka", "hy": "hy", "az": "az", "kk": "kk", "uz": "uz",
-    "tg": "tg", "tk": "tk", "ky": "ky", "mn": "mn", "af": "af", "sq": "sq", "am": "am",
-    "eu": "eu", "be": "be", "bs": "bs", "ca": "ca", "gl": "gl", "is": "is", "sw": "sw"
+    "kh": "Khmer", "en": "English", "ch": "Chinese", "th": "Thai", "vn": "Vietnamese",
+    "jp": "Japanese", "kr": "Korean", "fr": "French", "de": "German", "ru": "Russian",
+    "es": "Spanish", "it": "Italian", "in": "Hindi", "id": "Indonesian", "my": "Malay",
+    "ph": "Filipino", "ar": "Arabic", "pt": "Portuguese", "tr": "Turkish", "nl": "Dutch",
+    "pl": "Polish", "sv": "Swedish", "da": "Danish", "fi": "Finnish", "no": "Norwegian",
+    "cs": "Czech", "el": "Greek", "iw": "Hebrew", "ro": "Romanian", "uk": "Ukrainian",
+    "hu": "Hungarian", "sk": "Slovak", "bg": "Bulgarian", "hr": "Croatian", "sr": "Serbian",
+    "sl": "Slovenian", "et": "Estonian", "lv": "Latvian", "lt": "Lithuanian", "fa": "Persian",
+    "bn": "Bengali", "pa": "Punjabi", "gu": "Gujarati", "ta": "Tamil", "te": "Telugu",
+    "kn": "Kannada", "ml": "Malayalam", "si": "Sinhala", "ne": "Nepali", "lo": "Lao",
+    "myan": "Burmese", "ka": "Georgian", "hy": "Armenian", "az": "Azerbaijani", "kk": "Kazakh",
+    "uz": "Uzbek", "tg": "Tajik", "tk": "Turkmen", "ky": "Kyrgyz", "mn": "Mongolian",
+    "af": "Afrikaans", "sq": "Albanian", "am": "Amharic", "eu": "Basque", "be": "Belarusian",
+    "bs": "Bosnian", "ca": "Catalan", "gl": "Galician", "is": "Icelandic", "sw": "Swahili"
 }
 
 user_settings = {}
 
+# ហៅប្រើ Groq Client
+client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 សួស្តី! ខ្ញុំជា Bot បកប្រែភាសាដែលរៀបចំសម្រាប់ Render។\n"
-        "👉 វាយអក្សរដើម្បីបកប្រែ (Default: ខ្មែរ)\n"
-        "👉 ប្រើ `/list` ដើម្បីមើលកូដភាសាទាំង ៧០\n"
-        "👉 ឧទាហរណ៍៖ វាយ `/en` រួចផ្ញើសារដើម្បីបកប្រែជាអង់គ្លេស"
+        "🚀 **AI Translator Bot (70 Languages)**\n"
+        "ខ្ញុំអាចបកប្រែ Slang, Idioms និងអត្ថបទធម្មតាបានយ៉ាងឆ្លាតវៃ។\n\n"
+        "👉 ប្រើ `/list` ដើម្បីមើលភាសាទាំងអស់\n"
+        "👉 ប្រើ `/en`, `/kh`, `/th` ដើម្បីប្តូរភាសា\n"
+        "👉 ផ្ញើសារដើម្បីបកប្រែភ្លាមៗ!"
     )
 
-async def list_languages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def list_langs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     codes = list(LANG_CODES.keys())
-    text = "🌐 **បញ្ជីកូដភាសា (៧០):**\n\n"
+    text = "🌐 **បញ្ជីកូដភាសាទាំង ៧០:**\n\n"
     for i in range(0, len(codes), 5):
         text += " • " + ", ".join([f"/{c}" for c in codes[i:i+5]]) + "\n"
-    await update.message.reply_text(text, parse_mode='Markdown')
+    await update.message.reply_text(text)
 
 async def set_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     command = update.message.text.replace("/", "").lower()
     if command in LANG_CODES:
         user_settings[user_id] = LANG_CODES[command]
-        await update.message.reply_text(f"✅ ប្តូរទៅភាសា: **{command.upper()}**")
+        await update.message.reply_text(f"✅ ភាសាគោលដៅ: **{LANG_CODES[command]}**")
 
-async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def translate_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    target = user_settings.get(user_id, "km")
+    text_input = update.message.text
+    target_lang = user_settings.get(user_id, "Khmer")
+
     try:
-        translated = GoogleTranslator(source='auto', target=target).translate(update.message.text)
-        await update.message.reply_text(translated)
+        # Prompt សម្រាប់ឱ្យ AI យល់ Slang/Idioms
+        prompt = (
+            f"You are a professional translator. Translate the following text into {target_lang}. "
+            f"If the text contains slang, idioms, or cultural expressions, translate the meaning naturally "
+            f"and provide a very brief explanation in {target_lang} if necessary. "
+            f"Text: '{text_input}'"
+        )
+        
+        completion = client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4, # កម្រិតច្បាស់លាស់
+        )
+        
+        result = completion.choices[0].message.content
+        await update.message.reply_text(result)
+        
     except Exception as e:
-        logging.error(f"Translation Error: {e}")
-        await update.message.reply_text("❌ មានបញ្ហាបច្ចេកទេស។")
+        logging.error(f"AI Error: {e}")
+        await update.message.reply_text("❌ AI កំពុងមានបញ្ហា ឬ API Key ខុស។")
 
 if __name__ == '__main__':
-    # ទាញយក API Token ពី Environment Variable ដែលអ្នកនឹងដាក់ក្នុង Render
     BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-
-    if not BOT_TOKEN:
-        logging.error("រករង្វង់ TELEGRAM_TOKEN មិនឃើញក្នុង Environment Variables ទេ។")
-        exit(1)
-
+    
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
+    
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("list", list_languages))
+    app.add_handler(CommandHandler("list", list_langs))
     
     for cmd in LANG_CODES.keys():
         app.add_handler(CommandHandler(cmd, set_lang))
 
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), translate_message))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), translate_ai))
 
-    logging.info("Bot កំពុងដំណើរការលើ Render...")
+    print("🚀 Bot កំពុងដំណើរការជាមួយ ៧០ ភាសា...")
     app.run_polling()
