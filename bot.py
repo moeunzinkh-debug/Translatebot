@@ -6,22 +6,21 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
 
-# 1. កំណត់ Logging ដើម្បីមើលដំណើរការក្នុង Render
+# 1. កំណត់ Logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# 2. Web Server ក្លែងក្លាយសម្រាប់ Port Binding (ការពារ Timed Out លើ Render Web Service)
+# 2. Web Server សម្រាប់ Port 10000 (ការពារការគាំងលើ Render)
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Bot status: Online. Port: 10000 bound.")
+        self.wfile.write(b"Bot is online on port 10000")
 
 def run_port_listener():
-    # កែប្រែពី 8080 ទៅជា 10000 តាមការកំណត់របស់អ្នក
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-    logging.info(f"🌍 Web Server started on port {port}")
+    logging.info(f"🌍 Port Listener started on port {port}")
     server.serve_forever()
 
 # 3. បញ្ជីភាសាទាំង ៧០
@@ -46,19 +45,19 @@ user_settings = {}
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # ដកប៊ូតុង Inline ចេញដើម្បីការពារការគាំង
     msg = (
-        "👋 **សួស្តី! ខ្ញុំជា AI Translator Bot**\n\n"
-        "ខ្ញុំអាចបកប្រែ Slang និង Idioms បានយ៉ាងខ្លី និងរហ័ស។\n\n"
-        "🛠 **របៀបប្រើប្រាស់:**\n"
-        "• ប្រើ `/list` ដើម្បីមើលភាសាទាំង ៧០\n"
-        "• ប្រើ Command ភាសា (ឧទាហរណ៍: `/en`, `/kh`, `/ch`)\n"
-        "• បន្ទាប់មកផ្ញើសារដែលអ្នកចង់បកប្រែ"
+        "🚀 **AI Translator ត្រៀមខ្លួនរួចរាល់!**\n\n"
+        "ផ្ញើសារមកខ្ញុំដើម្បីបកប្រែ។\n"
+        "• វាយ `/list` ដើម្បីមើលភាសាទាំងអស់\n"
+        "• វាយ `/kh` `/en` `/ch` ដើម្បីប្តូរភាសា"
     )
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def list_languages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     codes = sorted(LANG_CODES.keys())
-    text = "🌐 **បញ្ជីភាសា (ចុចលើកូដដើម្បីប្តូរ):**\n\n"
+    text = "🌐 **បញ្ជីភាសាដែលអ្នកអាចចុចប្រើបាន:**\n\n"
+    # បង្កើតបញ្ជីដែលងាយស្រួលចុច (Clickable Commands)
     for i in range(0, len(codes), 4):
         line = " ".join([f"/{c}" for c in codes[i:i+4]])
         text += f"• {line}\n"
@@ -70,11 +69,11 @@ async def set_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if command in LANG_CODES:
         lang_name = LANG_CODES[command]
         user_settings[user_id] = lang_name
-        await update.message.reply_text(f"✅ Target: **{lang_name}**")
+        await update.message.reply_text(f"✅ ប្តូរទៅភាសា៖ **{lang_name}**", parse_mode='Markdown')
 
 async def translate_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    target = user_settings.get(user_id, "Khmer")
+    target = user_settings.get(user_id, "Khmer") # Default ជាខ្មែរ
     
     try:
         completion = client.chat.completions.create(
@@ -82,7 +81,7 @@ async def translate_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
             messages=[
                 {
                     "role": "system", 
-                    "content": f"You are a concise translator. Translate to {target}. Show ONLY the result. For slang/idioms, give the natural equivalent meaning in {target}. No explanations."
+                    "content": f"You are a concise translator. Translate to {target}. Show ONLY the result. Translate slang/idioms naturally. No chat, no explanations."
                 },
                 {"role": "user", "content": update.message.text}
             ],
@@ -91,26 +90,26 @@ async def translate_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(completion.choices[0].message.content.strip())
     except Exception as e:
         logging.error(f"AI Error: {e}")
-        await update.message.reply_text("❌ Error!")
+        await update.message.reply_text("❌ Error: AI មិនអាចបកប្រែបាននៅពេលនេះ។")
 
 if __name__ == '__main__':
-    # ១. បើក Port Listener ក្នុង Thread ថ្មី (Port 10000)
+    # ១. រត់ Port Listener (Port 10000)
     threading.Thread(target=run_port_listener, daemon=True).start()
 
     # ២. បង្កើត Bot
     TOKEN = os.environ.get("TELEGRAM_TOKEN")
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # ៣. ដាក់ Handlers
+    # ៣. ចុះឈ្មោះ Command
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("list", list_languages))
     
-    # បង្កើត Command សម្រាប់គ្រប់ភាសា (/kh, /en, /ch...)
+    # ចុះឈ្មោះ Command ភាសាទាំង ៧០
     for cmd in LANG_CODES.keys():
         app.add_handler(CommandHandler(cmd, set_lang))
 
-    # ទទួលសារអត្ថបទ
+    # ទទួលសារអក្សរធម្មតា
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), translate_ai))
 
-    logging.info("🚀 Bot is running with Port 10000 binding...")
+    logging.info("🚀 Bot is running without Inline Buttons for better stability...")
     app.run_polling()
