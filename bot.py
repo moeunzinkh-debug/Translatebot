@@ -3,6 +3,7 @@ import logging
 import asyncio
 import threading
 import time
+import random
 from flask import Flask, jsonify
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -38,10 +39,22 @@ LANG_CODES = {
     "is": ("Icelandic", "🇮🇸"), "sw": ("Swahili", "🇰🇪")
 }
 
-# ៣. ទាញយក API Keys ពី Environment Variables
+# ៣. ទាញយក API Keys ពី Environment Variables (ជាមួយកន្ទុយ S)
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GRO_KEY = os.environ.get("GROQ_API_KEY")
-SEA_KEY = os.environ.get("SEA_LION_API_KEY")
+
+# ទាញយក GROQ API Keys (អាចមានច្រើន)
+GROQ_KEYS_STR = os.environ.get("GROQ_API_KEYS", "")
+if GROQ_KEYS_STR:
+    GROQ_KEYS = [key.strip() for key in GROQ_KEYS_STR.split(",") if key.strip()]
+else:
+    GROQ_KEYS = []
+
+# ទាញយក Sea Lion API Keys (អាចមានច្រើន)
+SEA_KEYS_STR = os.environ.get("SEA_LION_API_KEYS", "")
+if SEA_KEYS_STR:
+    SEA_KEYS = [key.strip() for key in SEA_KEYS_STR.split(",") if key.strip()]
+else:
+    SEA_KEYS = []
 
 # ត្រួតពិនិត្យ Token
 if not TOKEN:
@@ -49,17 +62,35 @@ if not TOKEN:
     logger.info("💡 Please add TELEGRAM_TOKEN to Render Environment Variables")
     exit(1)
 
-# Initialize AI Clients
-client_groq = Groq(api_key=GRO_KEY) if GRO_KEY else None
-client_sealion = OpenAI(
-    base_url="https://api-inference.huggingface.co/v1/", 
-    api_key=SEA_KEY
-) if SEA_KEY else None
+# Initialize AI Clients with multiple keys
+client_groq_list = []
+client_sealion_list = []
+
+# Create multiple Groq clients
+for i, api_key in enumerate(GROQ_KEYS):
+    try:
+        client = Groq(api_key=api_key)
+        client_groq_list.append(client)
+        logger.info(f"✅ Groq client {i+1} initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to initialize Groq client {i+1}: {e}")
+
+# Create multiple Sea Lion clients
+for i, api_key in enumerate(SEA_KEYS):
+    try:
+        client = OpenAI(
+            base_url="https://api-inference.huggingface.co/v1/", 
+            api_key=api_key
+        )
+        client_sealion_list.append(client)
+        logger.info(f"✅ Sea Lion client {i+1} initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to initialize Sea Lion client {i+1}: {e}")
 
 # Store user language preferences
 user_settings = {}
 
-# --- Flask HTTP Server for Health Checks (NEW) ---
+# --- Flask HTTP Server for Health Checks ---
 app = Flask(__name__)
 start_time = time.time()
 
@@ -70,8 +101,9 @@ def home():
         "status": "online",
         "service": "Telegram AI Translator Bot",
         "languages": len(LANG_CODES),
+        "groq_clients": len(client_groq_list),
+        "sealion_clients": len(client_sealion_list),
         "uptime": round(time.time() - start_time, 2),
-        "telegram": "active",
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     })
 
@@ -85,10 +117,12 @@ def status():
     """Detailed status"""
     return jsonify({
         "telegram_bot": "running",
-        "groq_api": "available" if client_groq else "unavailable",
-        "sealion_api": "available" if client_sealion else "unavailable",
+        "groq_clients": len(client_groq_list),
+        "sealion_clients": len(client_sealion_list),
         "users": len(user_settings),
-        "supported_languages": len(LANG_CODES)
+        "supported_languages": len(LANG_CODES),
+        "groq_keys_available": len(GROQ_KEYS),
+        "sealion_keys_available": len(SEA_KEYS)
     })
 
 def run_flask_server():
@@ -97,7 +131,28 @@ def run_flask_server():
     logger.info(f"🌐 Starting Flask server on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
 
-# --- Telegram Bot Handlers (ORIGINAL - UNCHANGED) ---
+# --- Helper functions for API key rotation ---
+def get_groq_client():
+    """Get a Groq client using round-robin selection"""
+    if not client_groq_list:
+        return None
+    # Simple round-robin selection
+    current_index = getattr(get_groq_client, 'index', 0)
+    client = client_groq_list[current_index % len(client_groq_list)]
+    get_groq_client.index = (current_index + 1) % len(client_groq_list)
+    return client
+
+def get_sealion_client():
+    """Get a Sea Lion client using round-robin selection"""
+    if not client_sealion_list:
+        return None
+    # Simple round-robin selection
+    current_index = getattr(get_sealion_client, 'index', 0)
+    client = client_sealion_list[current_index % len(client_sealion_list)]
+    get_sealion_client.index = (current_index + 1) % len(client_sealion_list)
+    return client
+
+# --- Telegram Bot Handlers ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send welcome message when /start is issued"""
@@ -107,7 +162,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/list` - មើលភាសាទាំងអស់\n"
         "• `/kh`, `/en`, `/th` - ជ្រើសរើសភាសាគោលដៅ\n"
         "• ផ្ញើសារអ្វីក៏បាន ខ្ញុំនឹងបកប្រែភ្លាម!\n\n"
-        "⚙️ **បច្ចុប្បន្ន:** ភាសាគោលដៅគឺ **ខ្មែរ 🇰🇭**"
+        f"⚙️ **បច្ចុប្បន្ន:** ភាសាគោលដៅគឺ **ខ្មែរ 🇰🇭**\n"
+        f"🔑 **API Status:** Groq({len(client_groq_list)}), Sea Lion({len(client_sealion_list)})"
     )
     await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
@@ -133,9 +189,15 @@ async def set_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if command in LANG_CODES:
         lang_name, flag = LANG_CODES[command]
         user_settings[user_id] = (lang_name, flag)
+        
+        # Check which AI will be used
+        sea_langs = ["Khmer", "Thai", "Vietnamese", "Lao", "Indonesian", "Malay", "Burmese", "Filipino"]
+        ai_type = "Sea Lion" if lang_name in sea_langs else "Groq/Llama"
+        
         await update.message.reply_text(
             f"✅ **បានកំណត់ភាសាគោលដៅ:** {flag} **{lang_name}**\n\n"
-            f"ឥឡូវនេះ សារទាំងអស់នឹងត្រូវបកប្រែទៅជា **{lang_name}**។",
+            f"ឥឡូវនេះ សារទាំងអស់នឹងត្រូវបកប្រែទៅជា **{lang_name}**។\n"
+            f"⚡ **ប្រើ:** {ai_type} AI",
             parse_mode='Markdown'
         )
     else:
@@ -150,47 +212,85 @@ async def translate_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_to_translate = update.message.text
     
     # Southeast Asian languages that Sea Lion handles well
-    sea_langs = ["Khmer", "Thai", "Vietnamese", "Lao", "Indonesian", "Malay"]
+    sea_langs = ["Khmer", "Thai", "Vietnamese", "Lao", "Indonesian", "Malay", "Burmese", "Filipino"]
     
     try:
         # Show typing indicator
         await update.message.chat.send_action(action="typing")
         
         # Choose API based on language
-        if target_lang in sea_langs and client_sealion:
-            logger.info(f"Using Sea Lion for {target_lang}")
-            response = client_sealion.chat.completions.create(
-                model="aisingapore/Gemma-SEA-LION-v4-27B-IT",
-                messages=[{
-                    "role": "user", 
-                    "content": f"Translate this to {target_lang} language. Output only the translation: {text_to_translate}"
-                }],
-                temperature=0.3,
-                max_tokens=200
-            )
-            result = response.choices[0].message.content.strip()
-            
-        elif client_groq:
-            logger.info(f"Using Groq/Llama for {target_lang}")
-            response = client_groq.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {
-                        "role": "system", 
-                        "content": f"You are a professional translator. Translate the user's text to {target_lang} language. Provide ONLY the translated text without any explanations, notes, or additional text."
-                    },
-                    {
-                        "role": "user", 
-                        "content": text_to_translate
-                    }
-                ],
-                temperature=0.2,
-                max_tokens=200
-            )
-            result = response.choices[0].message.content.strip()
-            
+        if target_lang in sea_langs:
+            # Try Sea Lion first
+            client = get_sealion_client()
+            if client:
+                logger.info(f"Using Sea Lion for {target_lang}")
+                try:
+                    response = client.chat.completions.create(
+                        model="aisingapore/Gemma-SEA-LION-v4-27B-IT",
+                        messages=[{
+                            "role": "user", 
+                            "content": f"Translate this to {target_lang} language. Output only the translation: {text_to_translate}"
+                        }],
+                        temperature=0.3,
+                        max_tokens=200
+                    )
+                    result = response.choices[0].message.content.strip()
+                except Exception as e:
+                    logger.warning(f"Sea Lion failed: {e}, falling back to Groq")
+                    client = get_groq_client()
+                    if client:
+                        response = client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[
+                                {"role": "system", "content": f"Translate to {target_lang}"},
+                                {"role": "user", "content": text_to_translate}
+                            ],
+                            temperature=0.2,
+                            max_tokens=200
+                        )
+                        result = response.choices[0].message.content.strip()
+                    else:
+                        result = "❌ មិនមាន API ដែលអាចប្រើបាន"
+            else:
+                # Fall back to Groq if no Sea Lion
+                client = get_groq_client()
+                if client:
+                    response = client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=[
+                            {"role": "system", "content": f"Translate to {target_lang}"},
+                            {"role": "user", "content": text_to_translate}
+                        ],
+                        temperature=0.2,
+                        max_tokens=200
+                    )
+                    result = response.choices[0].message.content.strip()
+                else:
+                    result = "❌ មិនមាន API ដែលអាចប្រើបាន"
+                    
         else:
-            result = "❌ កំហុស៖ មិនមាន API Key ត្រឹមត្រូវ។ សូមពិនិត្យការកំណត់។"
+            # Use Groq for non-SEA languages
+            client = get_groq_client()
+            if client:
+                logger.info(f"Using Groq for {target_lang}")
+                response = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[
+                        {
+                            "role": "system", 
+                            "content": f"You are a professional translator. Translate the user's text to {target_lang} language. Provide ONLY the translated text without any explanations, notes, or additional text."
+                        },
+                        {
+                            "role": "user", 
+                            "content": text_to_translate
+                        }
+                    ],
+                    temperature=0.2,
+                    max_tokens=200
+                )
+                result = response.choices[0].message.content.strip()
+            else:
+                result = "❌ មិនមាន Groq API ដែលអាចប្រើបាន"
         
         # Send the translation
         await update.message.reply_text(f"{target_flag} {result}")
@@ -220,13 +320,41 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 3. ទទួលបកប្រែភ្លាម!
 
 **បច្ចេកវិជ្ជា:** AI (Groq Llama 3.3 + Sea Lion)
+**API Keys:** អាចប្រើច្រើន keys សម្រាប់ភាពរលូន
 """
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
-# --- Main Function with Both Flask and Telegram Bot (MODIFIED) ---
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show bot status"""
+    status_text = f"""
+🤖 **Bot Status**
+
+📊 **ទិន្នន័យ:**
+• អ្នកប្រើប្រាស់: {len(user_settings)}
+• ភាសាដែលគាំទ្រ: {len(LANG_CODES)}
+• Uptime: {round(time.time() - start_time, 1)} វិនាទី
+
+🔑 **API Status:**
+• Groq Clients: {len(client_groq_list)}/{len(GROQ_KEYS)}
+• Sea Lion Clients: {len(client_sealion_list)}/{len(SEA_KEYS)}
+
+🌐 **Health Check:** http://your-render-url.onrender.com/health
+"""
+    await update.message.reply_text(status_text, parse_mode='Markdown')
+
+# --- Main Function ---
 
 def main():
     """Main function to start both Flask server and Telegram bot"""
+    
+    # Log initialization status
+    logger.info("=" * 60)
+    logger.info("🚀 Initializing Telegram AI Translator Bot")
+    logger.info(f"🔑 TELEGRAM_TOKEN: {'✅' if TOKEN else '❌'}")
+    logger.info(f"🤖 Groq API Keys: {len(GROQ_KEYS)} keys available, {len(client_groq_list)} clients initialized")
+    logger.info(f"🦁 Sea Lion API Keys: {len(SEA_KEYS)} keys available, {len(client_sealion_list)} clients initialized")
+    logger.info(f"🌐 Supported Languages: {len(LANG_CODES)}")
+    logger.info("=" * 60)
     
     # Start Flask server in a background thread
     flask_thread = threading.Thread(target=run_flask_server, daemon=True)
@@ -243,6 +371,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("list", list_languages))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("status", status_command))
     
     # Add language selection handlers
     for cmd in LANG_CODES.keys():
@@ -252,20 +381,15 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_ai))
     
     # Start the bot
-    logger.info("🤖 Starting Telegram Translator Bot...")
-    logger.info(f"📊 Supported languages: {len(LANG_CODES)}")
-    logger.info(f"🔧 Groq API: {'✅' if client_groq else '❌'}")
-    logger.info(f"🐚 Sea Lion API: {'✅' if client_sealion else '❌'}")
-    logger.info("=" * 50)
-    logger.info("🌐 Bot is now running with HTTP health checks!")
-    logger.info("💡 Access health check at: http://your-render-url.onrender.com/health")
+    logger.info("🤖 Starting Telegram Translator Bot polling...")
     
     # Run polling with proper error handling
     try:
         application.run_polling(
             drop_pending_updates=True,
             allowed_updates=Update.ALL_TYPES,
-            close_loop=False
+            close_loop=False,
+            poll_interval=1.0
         )
     except KeyboardInterrupt:
         logger.info("🛑 Bot stopped by user")
