@@ -1,6 +1,9 @@
 import os
 import logging
 import asyncio
+import threading
+import time
+from flask import Flask, jsonify
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
@@ -56,7 +59,45 @@ client_sealion = OpenAI(
 # Store user language preferences
 user_settings = {}
 
-# --- Telegram Bot Handlers ---
+# --- Flask HTTP Server for Health Checks (NEW) ---
+app = Flask(__name__)
+start_time = time.time()
+
+@app.route('/')
+def home():
+    """Home page for health checks"""
+    return jsonify({
+        "status": "online",
+        "service": "Telegram AI Translator Bot",
+        "languages": len(LANG_CODES),
+        "uptime": round(time.time() - start_time, 2),
+        "telegram": "active",
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    })
+
+@app.route('/health')
+def health():
+    """Health check endpoint for Render"""
+    return jsonify({"status": "healthy"}), 200
+
+@app.route('/status')
+def status():
+    """Detailed status"""
+    return jsonify({
+        "telegram_bot": "running",
+        "groq_api": "available" if client_groq else "unavailable",
+        "sealion_api": "available" if client_sealion else "unavailable",
+        "users": len(user_settings),
+        "supported_languages": len(LANG_CODES)
+    })
+
+def run_flask_server():
+    """Run Flask server in a separate thread"""
+    port = int(os.environ.get("PORT", 10000))
+    logger.info(f"🌐 Starting Flask server on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+
+# --- Telegram Bot Handlers (ORIGINAL - UNCHANGED) ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send welcome message when /start is issued"""
@@ -182,9 +223,20 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
+# --- Main Function with Both Flask and Telegram Bot (MODIFIED) ---
+
 def main():
-    """Main function to start the bot"""
-    # Create application
+    """Main function to start both Flask server and Telegram bot"""
+    
+    # Start Flask server in a background thread
+    flask_thread = threading.Thread(target=run_flask_server, daemon=True)
+    flask_thread.start()
+    logger.info("✅ Flask HTTP server started for health checks")
+    
+    # Give Flask a moment to start
+    time.sleep(2)
+    
+    # Create and configure Telegram bot application
     application = Application.builder().token(TOKEN).build()
     
     # Add command handlers
@@ -202,11 +254,24 @@ def main():
     # Start the bot
     logger.info("🤖 Starting Telegram Translator Bot...")
     logger.info(f"📊 Supported languages: {len(LANG_CODES)}")
+    logger.info(f"🔧 Groq API: {'✅' if client_groq else '❌'}")
+    logger.info(f"🐚 Sea Lion API: {'✅' if client_sealion else '❌'}")
+    logger.info("=" * 50)
+    logger.info("🌐 Bot is now running with HTTP health checks!")
+    logger.info("💡 Access health check at: http://your-render-url.onrender.com/health")
     
-    application.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES
-    )
+    # Run polling with proper error handling
+    try:
+        application.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES,
+            close_loop=False
+        )
+    except KeyboardInterrupt:
+        logger.info("🛑 Bot stopped by user")
+    except Exception as e:
+        logger.error(f"❌ Bot stopped with error: {e}")
+        raise
 
 if __name__ == "__main__":
     # Start the bot
